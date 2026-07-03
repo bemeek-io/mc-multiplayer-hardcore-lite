@@ -3,7 +3,8 @@ plugins {
 }
 
 group = "com.evensteven"
-version = "1.2.0"
+// CI passes the real release version with -PpluginVersion=x.y.z
+version = providers.gradleProperty("pluginVersion").getOrElse("2.0.0-dev")
 
 repositories {
     mavenCentral()
@@ -11,10 +12,9 @@ repositories {
 }
 
 dependencies {
-    // Match this to your server's EXACT version. The scheme is <mcversion>.build.<n>.
-    // 26.2.1 -> "26.2.1.build.+"  (the trailing .+ grabs the latest build of that version)
-    // If Gradle says the version can't be found, check repo.papermc.io and adjust.
-    compileOnly("io.papermc.paper:paper-api:26.2.1.build.+")
+    // Tracks the latest build of the 26.2 line; adjust the prefix when the
+    // server jumps to a new Minecraft version (check repo.papermc.io).
+    compileOnly("io.papermc.paper:paper-api:26.2.build.+")
 }
 
 java {
@@ -24,4 +24,13 @@ java {
 
 tasks.processResources {
     filteringCharset = "UTF-8"
+    val props = mapOf("version" to project.version.toString())
+    inputs.properties(props)
+    filesMatching("plugin.yml") {
+        expand(props)
+    }
+}
+
+tasks.jar {
+    archiveBaseName.set("MultiplayerHardcoreLite")
 }

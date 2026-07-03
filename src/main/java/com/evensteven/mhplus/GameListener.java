@@ -3,13 +3,17 @@ package com.evensteven.mhplus;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.entity.Enemy;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 
@@ -27,13 +31,40 @@ public final class GameListener implements Listener {
         if (!plugin.isManaged(dead.getWorld()) || plugin.isResetting()) {
             return;
         }
-        plugin.triggerReset(dead.getName() + " has died.");
+        plugin.recordDeath(dead);
+    }
+
+    @EventHandler
+    public void onSpawn(CreatureSpawnEvent event) {
+        LivingEntity mob = event.getEntity();
+        if (mob instanceof Enemy && plugin.isManaged(mob.getWorld())) {
+            plugin.strengthenMob(mob, true);
+        }
     }
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        // Routes new arrivals, and wipes anyone who was offline through a reset.
+        // Routes new arrivals, applies the shared max HP, wipes anyone who was
+        // offline through a reset, and reopens any pending keep-item picks.
         plugin.handleArrival(event.getPlayer());
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        Player p = event.getPlayer();
+        // Freeze their inventory as the "last played" snapshot — unless they
+        // still owe picks from an earlier reset, in which case that older
+        // snapshot must survive.
+        if (plugin.getSnapshots().hasPending(p.getUniqueId())) {
+            return;
+        }
+        if (plugin.isManaged(p.getWorld())) {
+            plugin.getSnapshots().capture(p, plugin.getAttempts());
+        } else if (plugin.isResetting()) {
+            // Quitting from limbo mid-reset: keep whatever was frozen when the
+            // reset began; only capture if somehow nothing was.
+            plugin.getSnapshots().captureIfNotGeneration(p, plugin.getAttempts());
+        }
     }
 
     @EventHandler
