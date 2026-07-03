@@ -77,65 +77,92 @@ jobs:
               -d "$2"
           }
 
-          servers=$(api ServerService/ListServers '{}')
-          count=$(echo "$servers" | jq '.servers | length')
-          echo "discopanel reports $count server(s)"
-          updated=0
-
-          for row in $(echo "$servers" | jq -r '.servers[] | @base64'); do
-            srv() { echo "$row" | base64 -d | jq -r "$1"; }
-            id=$(srv '.id')
-            sname=$(srv '.name')
-            status=$(srv '.status')
+          # Full update flow for one server. Runs in a background subshell per
+          # server, so the restart-warning sleeps overlap instead of stacking.
+          update_server() {
+            local id="$1" sname="$2" status="$3"
 
             # Only update servers that already have the plugin installed.
             # Matches legacy "Plus" jars too, so old installs migrate to Lite.
-            mods=$(api ModService/ListMods "{\"serverId\":\"$id\"}" || echo '{}')
+            local mods old_ids
+            mods=$(api ModService/ListMods "{\"serverId\":\"$id\"}")
             old_ids=$(echo "$mods" | jq -r '(.mods // [])[]
               | select((.fileName // .file_name // "") | test("^MultiplayerHardcore(Lite|Plus).*\\.jar$"))
               | .id')
             if [ -z "$old_ids" ]; then
-              echo "-- $sname: plugin not installed, skipping"
-              continue
+              echo "plugin not installed, skipping"
+              return 0
             fi
 
-            echo "-- $sname ($status): uploading $name"
+            echo "($status) uploading $name"
+            local session
             session=$(api UploadService/InitUpload \
               "{\"filename\":\"$name\",\"totalSize\":\"$size\"}" | jq -r '.sessionId')
-            curl -fsS -X PUT "$DISCOPANEL_URL/api/v1/upload/$session" \
+            curl -sS --fail-with-body -X PUT "$DISCOPANEL_URL/api/v1/upload/$session" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$jar" > /dev/null
 
+            local old
             for old in $old_ids; do
-              echo "   removing old jar (mod $old)"
+              echo "removing old jar (mod $old)"
               api ModService/DeleteMod "{\"serverId\":\"$id\",\"modId\":\"$old\"}" > /dev/null
             done
 
             api ModService/ImportUploadedMod \
               "{\"serverId\":\"$id\",\"uploadSessionId\":\"$session\"}" > /dev/null
-            echo "   installed $name"
+            echo "installed $name"
 
             if [ "$status" = "SERVER_STATUS_RUNNING" ]; then
               # Warn online players before pulling the rug out. A failed
               # announcement never blocks the update itself.
               if [ "${RESTART_WARNING_SECONDS:-0}" -gt 0 ]; then
-                msg="Server is restarting in $RESTART_WARNING_SECONDS seconds to update MultiplayerHardcoreLite to $TAG."
-                echo "   warning players, waiting ${RESTART_WARNING_SECONDS}s"
+                local msg="Server is restarting in $RESTART_WARNING_SECONDS seconds to update MultiplayerHardcoreLite to $TAG."
+                echo "warning players, waiting ${RESTART_WARNING_SECONDS}s"
                 api ServerService/SendCommand \
                   "{\"id\":\"$id\",\"command\":\"say $msg\"}" > /dev/null \
-                  || echo "   (announcement failed; continuing)"
+                  || echo "(announcement failed; continuing)"
                 sleep "$RESTART_WARNING_SECONDS"
                 api ServerService/SendCommand \
                   "{\"id\":\"$id\",\"command\":\"say Restarting now. Back in a minute!\"}" > /dev/null || true
               fi
-              echo "   restarting $sname"
+              echo "restarting"
               # Server lifecycle RPCs take "id", unlike the mod RPCs' "serverId".
               api ServerService/RestartServer "{\"id\":\"$id\"}" > /dev/null
             else
-              echo "   $sname is $status; new jar picked up on next start"
+              echo "server is $status; new jar picked up on next start"
             fi
-            updated=$((updated + 1))
+          }
+
+          servers=$(api ServerService/ListServers '{}')
+          count=$(echo "$servers" | jq '.servers | length')
+          echo "discopanel reports $count server(s)"
+
+          # Fan out: one background job per server, each logging to its own
+          # file so parallel output doesn't interleave.
+          logdir=$(mktemp -d)
+          pids=() ids=() snames=()
+          for row in $(echo "$servers" | jq -r '.servers[] | @base64'); do
+            srv() { echo "$row" | base64 -d | jq -r "$1"; }
+            id=$(srv '.id')
+            sname=$(srv '.name')
+            status=$(srv '.status')
+            ( update_server "$id" "$sname" "$status" ) > "$logdir/$id.log" 2>&1 &
+            pids+=($!) ids+=("$id") snames+=("$sname")
           done
 
+          failed=0
+          for i in "${!pids[@]}"; do
+            rc=0
+            wait "${pids[$i]}" || rc=$?
+            echo "== ${snames[$i]} =="
+            sed 's/^/   /' "$logdir/${ids[$i]}.log"
+            if [ "$rc" -ne 0 ]; then
+              echo "   FAILED (exit $rc)"
+              failed=1
+            fi
+          done
+
+          updated=$(cat "$logdir"/*.log 2>/dev/null | grep -c '^installed ' || true)
           echo "Updated $updated server(s)."
+          exit "$failed"
