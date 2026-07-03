@@ -1,0 +1,15 @@
+name: MultiplayerHardcorePlus
+version: 1.2.0
+main: com.evensteven.mhplus.MHPlus
+api-version: '26.2'
+description: If one player dies, everyone dies and the world regenerates.
+authors: [you]
+commands:
+  mhreset:
+    description: Force a world reset now, optionally with a seed (number or word).
+    usage: /mhreset [seed]
+    permission: mhplus.reset
+permissions:
+  mhplus.reset:
+    description: Allows forcing a manual world reset.
+    default: op
