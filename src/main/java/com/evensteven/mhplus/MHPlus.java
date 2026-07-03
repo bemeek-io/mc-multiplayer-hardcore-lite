@@ -135,6 +135,12 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             getCommand("mhkeep").setExecutor(this);
         }
 
+        if (Bukkit.isHardcore()) {
+            getLogger().warning("hardcore=true is set in server.properties. The plugin cancels the"
+                    + " forced spectator-on-death so the shared health pool works anyway, but"
+                    + " consider setting hardcore=false to avoid fighting the server.");
+        }
+
         for (Player p : Bukkit.getOnlinePlayers()) {
             handleArrival(p);
         }
@@ -560,6 +566,23 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         if (isManaged(p.getWorld()) && p.getGameMode() == GameMode.SPECTATOR) {
             p.setGameMode(GameMode.SURVIVAL);
         }
+    }
+
+    /**
+     * Safety net for the cancelled hardcore-death spectator switch: a tick
+     * later, make sure the player really is in survival with the team's max
+     * health, whatever the server did after our event handlers ran.
+     */
+    public void ensureSurvivalNextTick(Player p) {
+        Bukkit.getScheduler().runTask(this, () -> {
+            if (!p.isOnline() || resetting) {
+                return;
+            }
+            applyMaxHealth(p);
+            if (isManaged(p.getWorld()) && p.getGameMode() == GameMode.SPECTATOR) {
+                p.setGameMode(GameMode.SURVIVAL);
+            }
+        });
     }
 
     public void handleArrival(Player p) {

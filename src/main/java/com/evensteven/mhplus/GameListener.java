@@ -15,6 +15,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
+import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 
@@ -78,6 +79,23 @@ public final class GameListener implements Listener {
         if (w == null || !plugin.isManaged(w)) {
             event.setRespawnLocation(plugin.getOver().getSpawnLocation());
         }
+    }
+
+    @EventHandler
+    public void onGameModeChange(PlayerGameModeChangeEvent event) {
+        // With hardcore=true in server.properties, the server forces every
+        // dead player into spectator right AFTER the respawn events have run
+        // (it reads server.properties, so the per-world hardcore flag doesn't
+        // stop it). Deaths here cost the team hearts instead of the run, so
+        // cancel that switch outright.
+        if (event.getCause() != PlayerGameModeChangeEvent.Cause.HARDCORE_DEATH) {
+            return;
+        }
+        if (plugin.isResetting()) {
+            return;
+        }
+        event.setCancelled(true);
+        plugin.ensureSurvivalNextTick(event.getPlayer());
     }
 
     @EventHandler
