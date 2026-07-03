@@ -17,9 +17,13 @@ countdown-seconds: 5
 # slower resets, since more explored terrain must be deleted.
 world-border-radius: 0
 
-# Wipe inventories, armor, ender chest and XP when the world resets.
+# Wipe inventories, armor and XP when the world resets.
 # Players still get their keep-items-count picks back afterwards.
 clear-inventory-on-reset: true
+
+# Ender chest contents persist across world resets by default (a shared
+# stash that survives the apocalypse). Set true to wipe them too.
+clear-ender-chest-on-reset: false
 
 # Hearts every player loses each time someone dies (1 heart = 2 HP).
 # With the default 2, the 5th death empties the pool and resets the world.

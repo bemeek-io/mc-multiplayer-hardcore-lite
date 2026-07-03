@@ -57,6 +57,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     private int countdownSeconds;
     private double borderRadius;
     private boolean clearInventory;
+    private boolean clearEnderChest;
 
     private double hpLossPerDeath;
     private double mobHealthBonusPerDeath;
@@ -91,6 +92,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         countdownSeconds = Math.max(1, getConfig().getInt("countdown-seconds", 5));
         borderRadius = getConfig().getDouble("world-border-radius", 0.0);
         clearInventory = getConfig().getBoolean("clear-inventory-on-reset", true);
+        clearEnderChest = getConfig().getBoolean("clear-ender-chest-on-reset", false);
         // Configured in hearts (1 heart = 2 HP); stored internally as HP.
         hpLossPerDeath = getConfig().getDouble("hearts-lost-per-death", 2.0) * 2.0;
         if (getConfig().contains("hp-loss-per-death")) {
@@ -536,10 +538,14 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         if (clearInventory) {
             p.getInventory().clear();
             p.getInventory().setArmorContents(null);
-            p.getEnderChest().clear();
             p.setExp(0f);
             p.setLevel(0);
             p.setTotalExperience(0);
+        }
+        // Ender chest contents live in per-player data under the primary
+        // world, which resets never touch — left alone, they carry over.
+        if (clearEnderChest) {
+            p.getEnderChest().clear();
         }
         p.setFoodLevel(20);
         p.setSaturation(20f);

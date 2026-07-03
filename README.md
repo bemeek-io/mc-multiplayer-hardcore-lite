@@ -34,6 +34,11 @@ Written against the Paper 26.2 API (Java 25).
   picks are spent, so nobody gets skipped past.
 - Closing the menu early is safe: picks stay pending and `/mhkeep` (or the
   next login) reopens it.
+- **Ender chests persist across resets** (separate from the 3 picks). Their
+  contents live in per-player data outside the gameplay worlds, so whatever
+  you stash survives the apocalypse — you just need to craft a new ender
+  chest in the new world to get at it. Disable with
+  `clear-ender-chest-on-reset: true`.
 
 ## Commands
 
@@ -52,6 +57,7 @@ Written against the Paper 26.2 API (Java 25).
 | `countdown-seconds` | `5` | Delay between the pool-emptying death and the wipe. |
 | `world-border-radius` | `0` | Smaller border = faster resets (less terrain to delete); 0 disables. |
 | `clear-inventory-on-reset` | `true` | Wipe inventories/XP on a new world (keep-picks are given back afterwards). |
+| `clear-ender-chest-on-reset` | `false` | Also wipe ender chest contents on reset. Off by default: ender chests are the permanent stash. |
 | `hearts-lost-per-death` | `2` | Hearts everyone loses per death (1 heart = 2 HP). Default means the 5th death resets the world. |
 | `mob-health-bonus-per-death` | `0.15` | +15% hostile mob max health per accumulated death. |
 | `mob-damage-bonus-per-death` | `0.10` | +10% hostile mob attack damage per accumulated death. |
