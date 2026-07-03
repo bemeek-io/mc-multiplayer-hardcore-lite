@@ -38,6 +38,9 @@ jobs:
     env:
       DISCOPANEL_URL: ${{ secrets.DISCOPANEL_HOST }}
       GH_TOKEN: ${{ github.token }}
+      # Seconds of in-game warning players get before a restart. 0 = restart
+      # immediately with no announcement.
+      RESTART_WARNING_SECONDS: '60'
     concurrency:
       group: deploy-mhplus
     environment:
@@ -51,6 +54,7 @@ jobs:
             tag=$(gh release view --repo '${{ github.repository }}' --json tagName -q .tagName)
           fi
           echo "Deploying release $tag"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
           gh release download "$tag" --repo '${{ github.repository }}' --pattern '*.jar' --dir dist
           ls -la dist/
 
@@ -113,6 +117,18 @@ jobs:
             echo "   installed $name"
 
             if [ "$status" = "SERVER_STATUS_RUNNING" ]; then
+              # Warn online players before pulling the rug out. A failed
+              # announcement never blocks the update itself.
+              if [ "${RESTART_WARNING_SECONDS:-0}" -gt 0 ]; then
+                msg="Server is restarting in $RESTART_WARNING_SECONDS seconds to update MultiplayerHardcoreLite to $TAG."
+                echo "   warning players, waiting ${RESTART_WARNING_SECONDS}s"
+                api ServerService/SendCommand \
+                  "{\"id\":\"$id\",\"command\":\"say $msg\"}" > /dev/null \
+                  || echo "   (announcement failed; continuing)"
+                sleep "$RESTART_WARNING_SECONDS"
+                api ServerService/SendCommand \
+                  "{\"id\":\"$id\",\"command\":\"say Restarting now. Back in a minute!\"}" > /dev/null || true
+              fi
               echo "   restarting $sname"
               # Server lifecycle RPCs take "id", unlike the mod RPCs' "serverId".
               api ServerService/RestartServer "{\"id\":\"$id\"}" > /dev/null
