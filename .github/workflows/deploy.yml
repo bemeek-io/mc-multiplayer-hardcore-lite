@@ -65,7 +65,9 @@ jobs:
           size=$(stat -c%s "$jar")
 
           api() { # api <Service/Method> <json-body>
-            curl -fsS -X POST "$DISCOPANEL_URL/discopanel.v1.$1" \
+            # --fail-with-body: nonzero exit on HTTP errors, but still print the
+            # Connect error JSON ({"code":...,"message":...}) for the log.
+            curl -sS --fail-with-body -X POST "$DISCOPANEL_URL/discopanel.v1.$1" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d "$2"
@@ -112,7 +114,8 @@ jobs:
 
             if [ "$status" = "SERVER_STATUS_RUNNING" ]; then
               echo "   restarting $sname"
-              api ServerService/RestartServer "{\"serverId\":\"$id\"}" > /dev/null
+              # Server lifecycle RPCs take "id", unlike the mod RPCs' "serverId".
+              api ServerService/RestartServer "{\"id\":\"$id\"}" > /dev/null
             else
               echo "   $sname is $status; new jar picked up on next start"
             fi
