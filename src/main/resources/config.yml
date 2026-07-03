@@ -21,9 +21,9 @@ world-border-radius: 0
 # Players still get their keep-items-count picks back afterwards.
 clear-inventory-on-reset: true
 
-# Max health every player loses each time someone dies, in HP (2 HP = 1 heart).
-# With the default 2, the 10th death empties the pool and resets the world.
-hp-loss-per-death: 2
+# Hearts every player loses each time someone dies (1 heart = 2 HP).
+# With the default 2, the 5th death empties the pool and resets the world.
+hearts-lost-per-death: 2
 
 # How much stronger hostile mobs get per accumulated death this run.
 # 0.15 = +15% max health per death; 0.10 = +10% attack damage per death.

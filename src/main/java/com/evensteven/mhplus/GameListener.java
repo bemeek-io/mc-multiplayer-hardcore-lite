@@ -14,6 +14,7 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 
@@ -77,6 +78,13 @@ public final class GameListener implements Listener {
         if (w == null || !plugin.isManaged(w)) {
             event.setRespawnLocation(plugin.getOver().getSpawnLocation());
         }
+    }
+
+    @EventHandler
+    public void onPostRespawn(PlayerPostRespawnEvent event) {
+        // Undo spectator mode from any hardcore world flag and reapply the
+        // team's reduced max health to the fresh player entity.
+        plugin.handleRespawned(event.getPlayer());
     }
 
     @EventHandler(ignoreCancelled = true)

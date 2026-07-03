@@ -91,7 +91,12 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         countdownSeconds = Math.max(1, getConfig().getInt("countdown-seconds", 5));
         borderRadius = getConfig().getDouble("world-border-radius", 0.0);
         clearInventory = getConfig().getBoolean("clear-inventory-on-reset", true);
-        hpLossPerDeath = getConfig().getDouble("hp-loss-per-death", 2.0);
+        // Configured in hearts (1 heart = 2 HP); stored internally as HP.
+        hpLossPerDeath = getConfig().getDouble("hearts-lost-per-death", 2.0) * 2.0;
+        if (getConfig().contains("hp-loss-per-death")) {
+            getConfig().set("hp-loss-per-death", null); // legacy HP-based key
+            saveConfig();
+        }
         mobHealthBonusPerDeath = getConfig().getDouble("mob-health-bonus-per-death", 0.15);
         mobDamageBonusPerDeath = getConfig().getDouble("mob-damage-bonus-per-death", 0.10);
         keepItemCount = Math.max(0, getConfig().getInt("keep-items-count", 3));
@@ -291,6 +296,10 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             return;
         }
         w.setDifficulty(Difficulty.HARD);
+        // Custom worlds inherit hardcore=true from server.properties; a
+        // hardcore world forces dead players into spectator, which fights the
+        // shared-health-pool design. Deaths must respawn normally.
+        w.setHardcore(false);
         w.setGameRule(GameRules.KEEP_INVENTORY, false);
         w.setGameRule(GameRules.IMMEDIATE_RESPAWN, true);
         if (primary) {
@@ -536,6 +545,21 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             p.removePotionEffect(eff.getType());
         }
         p.getPersistentDataContainer().set(genKey, PersistentDataType.INTEGER, attempts);
+    }
+
+    /**
+     * After a respawn: a hardcore-flagged world may have shoved the player
+     * into spectator, and the fresh player entity may have lost the reduced
+     * max-health attribute. Fix both.
+     */
+    public void handleRespawned(Player p) {
+        if (resetting) {
+            return;
+        }
+        applyMaxHealth(p);
+        if (isManaged(p.getWorld()) && p.getGameMode() == GameMode.SPECTATOR) {
+            p.setGameMode(GameMode.SURVIVAL);
+        }
     }
 
     public void handleArrival(Player p) {

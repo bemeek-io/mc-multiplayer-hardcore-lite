@@ -12,12 +12,12 @@ Written against the Paper 26.2 API (Java 25).
 
 1. Everyone starts with the normal 20 max HP (10 hearts).
 2. When **any** player dies:
-   - **Everyone** — online, offline, and players yet to join — loses 2 max HP
-     (1 heart). This only lowers the cap; nobody takes damage from it.
+   - **Everyone** — online, offline, and players yet to join — loses 2 hearts
+     (4 max HP). This only lowers the cap; nobody takes damage from it.
    - Hostile mobs get stronger: +15% max health and +10% attack damage per
      accumulated death (applied to newly spawning and already-loaded mobs).
    - The dying player respawns as usual and the run continues.
-3. When the pool is exhausted (10th death on default settings), the gameplay
+3. When the pool is exhausted (5th death on default settings), the gameplay
    world set (`hardcore`, `hardcore_nether`, `hardcore_the_end`) is deleted
    and regenerated with a fresh seed. Max health and mob strength reset.
 4. After the reset, every player chooses **3 items or stacks** from the
@@ -52,7 +52,7 @@ Written against the Paper 26.2 API (Java 25).
 | `countdown-seconds` | `5` | Delay between the pool-emptying death and the wipe. |
 | `world-border-radius` | `0` | Smaller border = faster resets (less terrain to delete); 0 disables. |
 | `clear-inventory-on-reset` | `true` | Wipe inventories/XP on a new world (keep-picks are given back afterwards). |
-| `hp-loss-per-death` | `2` | Max HP everyone loses per death (2 HP = 1 heart). Default means the 10th death resets the world. |
+| `hearts-lost-per-death` | `2` | Hearts everyone loses per death (1 heart = 2 HP). Default means the 5th death resets the world. |
 | `mob-health-bonus-per-death` | `0.15` | +15% hostile mob max health per accumulated death. |
 | `mob-damage-bonus-per-death` | `0.10` | +10% hostile mob attack damage per accumulated death. |
 | `keep-items-count` | `3` | Items/stacks each player may carry through a reset. 0 disables carry-over. |
@@ -72,9 +72,11 @@ applying new ones.
 1. Grab the jar from the [latest GitHub release](../../releases/latest) (built
    automatically on every push to `main`) and drop it into your server's
    `plugins/` folder.
-2. **Do NOT set `hardcore=true`** in server.properties — the plugin simulates
-   hardcore via the shared health pool and reset; real hardcore mode would
-   lock dead players into spectator and fight the plugin.
+2. Leave `hardcore=false` in server.properties — the plugin simulates
+   hardcore via the shared health pool and reset. (It also forces its
+   gameplay worlds out of hardcore mode and un-spectates respawning players,
+   so a stray `hardcore=true` won't lock anyone out, but there's no reason to
+   set it.)
 3. Make sure `gameplay-world` in `config.yml` is **different** from your
    `level-name` (default `hardcore` vs `world` is fine).
 4. Start the server. On first boot it generates the `hardcore` world set and
