@@ -11,16 +11,14 @@ import org.bukkit.WorldBorder;
 import org.bukkit.WorldCreator;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
-import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
-import org.bukkit.entity.Enemy;
-import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import java.io.File;
@@ -30,18 +28,19 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 /**
- * Shared-life hardcore: every player death drains max health from EVERYONE
- * (present and future) and makes hostile mobs stronger. When the team's max
- * health is exhausted, the gameplay world set is wiped and regenerated
- * in-process (no server restart). After a reset each player chooses a few
- * items from the inventory they last played with to carry into the new world.
+ * Per-player hardcore: each death grants a timed "Death" stack that cuts that
+ * player's max health. Stacks expire independently. When any player's max
+ * health hits zero the gameplay world set is wiped and regenerated in-process.
+ * After a reset, players with no active Death stacks choose a few items from
+ * the inventory they last played with to carry into the new world.
  *
  * Commands:
  *   /mhreset [seed]  - force a reset now, optionally with a seed.
- *   /mhstatus        - show the state of the current run.
+ *   /mhstatus        - show the state of the current run / your Death stacks.
  *   /mhkeep          - reopen a pending "choose items to keep" menu.
  */
 public final class MHPlus extends JavaPlugin implements CommandExecutor {
@@ -59,26 +58,22 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     private boolean clearInventory;
     private boolean clearEnderChest;
 
-    private double hpLossPerDeath;
-    private double mobHealthBonusPerDeath;
-    private double mobDamageBonusPerDeath;
+    private double hpLossPerStack;
+    private long deathDurationMs;
     private int keepItemCount;
 
     private long currentSeed;
     private Long pendingSeed; // if set, the next regeneration uses this exact seed
     private int attempts;
-    private int deaths; // deaths in the current run; drives max HP and mob strength
+    private int deaths; // deaths in the current run (flavor / status only)
     private volatile boolean resetting = false;
 
     private NamespacedKey genKey;
-    private NamespacedKey mobHealthKey;
-    private NamespacedKey mobDamageKey;
-    // Keys written by the plugin back when it was named MultiplayerHardcorePlus;
-    // still read (and cleaned up) so a rename doesn't wipe players or stack mob buffs.
+    // Key written by the plugin back when it was named MultiplayerHardcorePlus;
+    // still read (and cleaned up) so a rename doesn't wipe players.
     private NamespacedKey legacyGenKey;
-    private NamespacedKey legacyMobHealthKey;
-    private NamespacedKey legacyMobDamageKey;
     private SnapshotStore snapshots;
+    private DeathStacks deathStacks;
     private KeepSelection selection;
     private final Random random = new Random();
 
@@ -94,24 +89,17 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         clearInventory = getConfig().getBoolean("clear-inventory-on-reset", true);
         clearEnderChest = getConfig().getBoolean("clear-ender-chest-on-reset", false);
         // Configured in hearts (1 heart = 2 HP); stored internally as HP.
-        hpLossPerDeath = getConfig().getDouble("hearts-lost-per-death", 2.0) * 2.0;
-        if (getConfig().contains("hp-loss-per-death")) {
-            getConfig().set("hp-loss-per-death", null); // legacy HP-based key
-            saveConfig();
-        }
-        mobHealthBonusPerDeath = getConfig().getDouble("mob-health-bonus-per-death", 0.15);
-        mobDamageBonusPerDeath = getConfig().getDouble("mob-damage-bonus-per-death", 0.10);
+        hpLossPerStack = getConfig().getDouble("hearts-per-death-stack", 2.0) * 2.0;
+        deathDurationMs = TimeUnit.HOURS.toMillis(
+                Math.max(1L, getConfig().getLong("death-duration-hours", 48L)));
+        stripLegacyConfigKeys();
         keepItemCount = Math.max(0, getConfig().getInt("keep-items-count", 3));
         attempts = getConfig().getInt("attempts", 0);
         deaths = getConfig().getInt("deaths", 0);
         currentSeed = getConfig().contains("seed") ? getConfig().getLong("seed") : random.nextLong();
 
         genKey = new NamespacedKey(this, "seen_generation");
-        mobHealthKey = new NamespacedKey(this, "mob_health_bonus");
-        mobDamageKey = new NamespacedKey(this, "mob_damage_bonus");
         legacyGenKey = NamespacedKey.fromString("multiplayerhardcoreplus:seen_generation");
-        legacyMobHealthKey = NamespacedKey.fromString("multiplayerhardcoreplus:mob_health_bonus");
-        legacyMobDamageKey = NamespacedKey.fromString("multiplayerhardcoreplus:mob_damage_bonus");
         limbo = Bukkit.getWorlds().get(0);
 
         if (baseName.equalsIgnoreCase(limbo.getName())) {
@@ -122,6 +110,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         }
 
         snapshots = new SnapshotStore(this);
+        deathStacks = new DeathStacks(this, deathDurationMs);
         selection = new KeepSelection(this, snapshots);
 
         loadOrCreateWorlds(currentSeed);
@@ -137,9 +126,23 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             getCommand("mhkeep").setExecutor(this);
         }
 
+        // Expire stacks and reapply max HP about once a minute.
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (resetting) {
+                    return;
+                }
+                deathStacks.pruneExpired();
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    applyMaxHealth(p);
+                }
+            }
+        }.runTaskTimer(this, 20L * 60L, 20L * 60L);
+
         if (Bukkit.isHardcore()) {
             getLogger().warning("hardcore=true is set in server.properties. The plugin cancels the"
-                    + " forced spectator-on-death so the shared health pool works anyway, but"
+                    + " forced spectator-on-death so deaths can apply Death stacks, but"
                     + " consider setting hardcore=false to avoid fighting the server.");
         }
 
@@ -147,7 +150,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             handleArrival(p);
         }
         getLogger().info("Enabled. Current run: attempt #" + attempts + ", " + deaths
-                + " death(s), team max HP " + currentMaxHealth() + ".");
+                + " death(s) this run.");
     }
 
     @Override
@@ -156,6 +159,24 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         getConfig().set("deaths", deaths);
         getConfig().set("seed", currentSeed);
         saveConfig();
+    }
+
+    private void stripLegacyConfigKeys() {
+        boolean dirty = false;
+        for (String key : new String[] {
+                "hp-loss-per-death",
+                "hearts-lost-per-death",
+                "mob-health-bonus-per-death",
+                "mob-damage-bonus-per-death"
+        }) {
+            if (getConfig().contains(key)) {
+                getConfig().set(key, null);
+                dirty = true;
+            }
+        }
+        if (dirty) {
+            saveConfig();
+        }
     }
 
     // ----------------------------------------------------- legacy migration
@@ -231,19 +252,20 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     }
 
     private boolean cmdStatus(CommandSender sender) {
-        double max = currentMaxHealth();
-        sender.sendMessage("§6Attempt #" + attempts + " §7| §c" + deaths
-                + " death(s) §7| §aTeam max HP: " + fmt(max) + "/" + fmt(baseMaxHealth())
-                + " (" + fmt(max / 2.0) + " hearts)");
-        if (deaths > 0) {
-            sender.sendMessage("§7Mobs: §c+" + Math.round(deaths * mobHealthBonusPerDeath * 100)
-                    + "% health§7, §c+" + Math.round(deaths * mobDamageBonusPerDeath * 100)
-                    + "% damage§7.");
-        }
-        if (hpLossPerDeath > 0) {
-            int untilReset = (int) Math.ceil(max / hpLossPerDeath);
-            sender.sendMessage("§7" + untilReset + " more death" + (untilReset == 1 ? "" : "s")
-                    + " and the world resets.");
+        sender.sendMessage("§6Attempt #" + attempts + " §7| §c" + deaths + " death(s) this run");
+        if (sender instanceof Player p) {
+            int stacks = deathStacks.activeCount(p.getUniqueId());
+            double max = maxHealthFor(p);
+            sender.sendMessage("§7Your Death stacks: §c" + stacks
+                    + " §7(−" + fmt(stacks * hpLossPerStack / 2.0) + " hearts)"
+                    + " §7| max HP: §a" + fmt(Math.max(0.0, max))
+                    + " §7(" + fmt(Math.max(0.0, max) / 2.0) + " hearts)");
+            Long next = deathStacks.nextExpiry(p.getUniqueId());
+            if (next != null) {
+                long hoursLeft = Math.max(0L, (next - System.currentTimeMillis() + 3_599_999L) / 3_600_000L);
+                sender.sendMessage("§7Next Death expires in about §e" + hoursLeft + " hour"
+                        + (hoursLeft == 1 ? "" : "s") + "§7.");
+            }
         }
         return true;
     }
@@ -305,8 +327,8 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         }
         w.setDifficulty(Difficulty.HARD);
         // Custom worlds inherit hardcore=true from server.properties; a
-        // hardcore world forces dead players into spectator, which fights the
-        // shared-health-pool design. Deaths must respawn normally.
+        // hardcore world forces dead players into spectator. Deaths must
+        // respawn normally so Death stacks can apply.
         w.setHardcore(false);
         w.setGameRule(GameRules.KEEP_INVENTORY, false);
         w.setGameRule(GameRules.IMMEDIATE_RESPAWN, true);
@@ -321,101 +343,74 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         }
     }
 
-    // ------------------------------------------------------------ health pool
+    // ------------------------------------------------------------ health / Death
 
     public double baseMaxHealth() {
         return Attribute.MAX_HEALTH.getDefaultValue(); // 20.0
     }
 
-    public double currentMaxHealth() {
-        return Math.max(0.0, baseMaxHealth() - deaths * hpLossPerDeath);
+    public double maxHealthFor(Player p) {
+        return baseMaxHealth() - deathStacks.activeCount(p.getUniqueId()) * hpLossPerStack;
     }
 
-    /** Sets the player's max-health attribute to the team's current pool. */
+    /** Sets the player's max-health attribute from their active Death stacks. */
     public void applyMaxHealth(Player p) {
         AttributeInstance inst = p.getAttribute(Attribute.MAX_HEALTH);
         if (inst == null) {
             return;
         }
-        double max = Math.max(1.0, currentMaxHealth());
+        double max = Math.max(1.0, maxHealthFor(p));
         inst.setBaseValue(max);
         if (p.getHealth() > max) {
             p.setHealth(max);
         }
+        syncDeathEffect(p);
     }
 
     /**
-     * Called for every player death in a managed world. Drains the shared
-     * health pool; if it hits zero the world resets, otherwise everyone's max
-     * HP drops and mobs get stronger.
+     * Shows Death stacks as a vanilla Poison HUD buff (icon + roman level +
+     * countdown to the next stack expiry). Damage from that poison is cancelled
+     * in GameListener so it stays cosmetic.
+     */
+    public void syncDeathEffect(Player p) {
+        int stacks = deathStacks.activeCount(p.getUniqueId());
+        if (stacks <= 0) {
+            p.removePotionEffect(PotionEffectType.POISON);
+            return;
+        }
+        Long next = deathStacks.nextExpiry(p.getUniqueId());
+        long remainingMs = next == null ? deathDurationMs : Math.max(50L, next - System.currentTimeMillis());
+        int ticks = (int) Math.min(Integer.MAX_VALUE, remainingMs / 50L);
+        // ambient=false, particles=true, icon=true — shows in the top-right buff bar
+        p.addPotionEffect(new PotionEffect(PotionEffectType.POISON, ticks, stacks - 1, false, true, true), true);
+    }
+
+    /**
+     * Called for every player death in a managed world (inventory already
+     * destroyed by the listener). Adds a Death stack; if that player's max
+     * HP hits zero the world resets.
      */
     public void recordDeath(Player dead) {
         deaths++;
         getConfig().set("deaths", deaths);
         saveConfig();
 
-        double newMax = currentMaxHealth();
+        deathStacks.add(dead.getUniqueId());
+        double newMax = maxHealthFor(dead);
         if (newMax <= 0.0) {
-            // The pool is spent. Freeze the dying player's inventory now (it is
-            // about to drop) so they too get to pick items for the next world.
-            snapshots.capture(dead, attempts);
-            snapshots.setPending(dead.getUniqueId(), keepItemCount);
-            triggerReset(dead.getName() + " has died, and the team's last hearts are spent.");
+            // Inventory was deleted on death; do not capture or grant picks to
+            // the player who just gained (another) Death stack.
+            triggerReset(dead.getName() + " has died, and their last hearts are spent.");
             return;
         }
 
-        for (Player p : Bukkit.getOnlinePlayers()) {
-            applyMaxHealth(p);
-        }
-        rescaleLoadedMobs();
-        announce("§4☠ §c" + dead.getName() + " has died. §7Everyone loses §c"
-                + fmt(hpLossPerDeath / 2.0) + " heart" + (hpLossPerDeath == 2.0 ? "" : "s")
-                + "§7 of max health (§c" + fmt(newMax / 2.0)
-                + "§7 hearts left) and mobs grow stronger.");
-    }
-
-    // ---------------------------------------------------------- mob scaling
-
-    /** Buffs a hostile mob's health/damage to match the current death count. */
-    public void strengthenMob(LivingEntity mob, boolean freshSpawn) {
-        if (deaths <= 0) {
-            return;
-        }
-        applyScalar(mob, Attribute.MAX_HEALTH, mobHealthKey, legacyMobHealthKey,
-                deaths * mobHealthBonusPerDeath);
-        applyScalar(mob, Attribute.ATTACK_DAMAGE, mobDamageKey, legacyMobDamageKey,
-                deaths * mobDamageBonusPerDeath);
-        if (freshSpawn) {
-            AttributeInstance health = mob.getAttribute(Attribute.MAX_HEALTH);
-            if (health != null) {
-                mob.setHealth(health.getValue());
-            }
-        }
-    }
-
-    private void applyScalar(LivingEntity mob, Attribute attr, NamespacedKey key,
-            NamespacedKey legacyKey, double amount) {
-        AttributeInstance inst = mob.getAttribute(attr);
-        if (inst == null) {
-            return;
-        }
-        inst.removeModifier(key);
-        if (legacyKey != null) {
-            inst.removeModifier(legacyKey); // buff saved on the mob under the old plugin name
-        }
-        inst.addModifier(new AttributeModifier(key, amount, AttributeModifier.Operation.MULTIPLY_SCALAR_1));
-    }
-
-    /** Re-buffs already-spawned hostiles after the death count changes. */
-    private void rescaleLoadedMobs() {
-        for (World w : new World[] {over, nether, end}) {
-            if (w == null) {
-                continue;
-            }
-            for (Enemy enemy : w.getEntitiesByClass(Enemy.class)) {
-                strengthenMob(enemy, false);
-            }
-        }
+        applyMaxHealth(dead);
+        int stacks = deathStacks.activeCount(dead.getUniqueId());
+        announce("§4☠ §c" + dead.getName() + " has died. §7They gain §cDeath §7(−"
+                + fmt(hpLossPerStack / 2.0) + " hearts for "
+                + TimeUnit.MILLISECONDS.toHours(deathDurationMs) + "h). §c"
+                + stacks + " §7stack" + (stacks == 1 ? "" : "s")
+                + " §7(§c" + fmt(newMax / 2.0) + "§7 hearts left). Inventory destroyed.");
     }
 
     // ------------------------------------------------------------ reset flow
@@ -457,10 +452,14 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     }
 
     private void holdThenRegenerate() {
-        // Freeze what everyone is carrying BEFORE they leave the world. The
-        // player whose death triggered the reset was captured at death time
-        // (same generation), so captureIfNotGeneration skips them.
+        // Freeze what clean players are carrying BEFORE they leave the world.
+        // Skip anyone with active Death — they get no carryover, and the
+        // terminal death left an empty inventory we must not overwrite a
+        // useful older snapshot with.
         for (Player p : Bukkit.getOnlinePlayers()) {
+            if (deathStacks.hasActive(p.getUniqueId())) {
+                continue;
+            }
             if (!snapshots.hasPending(p.getUniqueId())) {
                 snapshots.captureIfNotGeneration(p, attempts);
             }
@@ -485,14 +484,15 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         loadOrCreateWorlds(currentSeed);
 
         attempts++; // advance the run; offline players now lag behind this number
-        deaths = 0; // the health pool refills for the new world
+        deaths = 0;
         getConfig().set("attempts", attempts);
         getConfig().set("deaths", deaths);
         getConfig().set("seed", currentSeed);
         saveConfig();
 
-        // Everyone with a frozen snapshot (online or offline) gets their picks.
-        snapshots.offerPicksToAll(keepItemCount);
+        // Carryover only for players who had no Death stacks at wipe time.
+        snapshots.offerPicksToAll(keepItemCount, id -> !deathStacks.hasActive(id));
+        deathStacks.clearAll();
 
         over.getChunkAt(over.getSpawnLocation()).load();
         for (Player p : Bukkit.getOnlinePlayers()) {
@@ -551,11 +551,11 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         p.setSaturation(20f);
         p.setFireTicks(0);
         p.setFallDistance(0f);
-        applyMaxHealth(p);
-        p.setHealth(Math.max(1.0, currentMaxHealth()));
         for (PotionEffect eff : p.getActivePotionEffects()) {
             p.removePotionEffect(eff.getType());
         }
+        applyMaxHealth(p);
+        p.setHealth(Math.max(1.0, maxHealthFor(p)));
         p.getPersistentDataContainer().set(genKey, PersistentDataType.INTEGER, attempts);
     }
 
@@ -576,8 +576,8 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
 
     /**
      * Safety net for the cancelled hardcore-death spectator switch: a tick
-     * later, make sure the player really is in survival with the team's max
-     * health, whatever the server did after our event handlers ran.
+     * later, make sure the player really is in survival with their personal
+     * max health, whatever the server did after our event handlers ran.
      */
     public void ensureSurvivalNextTick(Player p) {
         Bukkit.getScheduler().runTask(this, () -> {
@@ -623,6 +623,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     public World getEnd() { return end; }
     public int getAttempts() { return attempts; }
     public SnapshotStore getSnapshots() { return snapshots; }
+    public DeathStacks getDeathStacks() { return deathStacks; }
     public KeepSelection getSelection() { return selection; }
 
     public boolean isManaged(World w) {

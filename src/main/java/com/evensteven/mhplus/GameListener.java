@@ -1,15 +1,15 @@
 package com.evensteven.mhplus;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
-import org.bukkit.entity.Enemy;
-import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.entity.CreatureSpawnEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityPotionEffectEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
@@ -18,6 +18,7 @@ import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
 import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
+import org.bukkit.potion.PotionEffectType;
 
 public final class GameListener implements Listener {
 
@@ -27,28 +28,62 @@ public final class GameListener implements Listener {
         this.plugin = plugin;
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.HIGH)
     public void onDeath(PlayerDeathEvent event) {
         Player dead = event.getEntity();
         if (!plugin.isManaged(dead.getWorld()) || plugin.isResetting()) {
             return;
         }
+        // Destroy inventory entirely — nothing drops on the ground.
+        event.getDrops().clear();
+        event.setDroppedExp(0);
+        dead.getInventory().clear();
+        dead.getInventory().setArmorContents(null);
+        dead.getInventory().setItemInOffHand(null);
         plugin.recordDeath(dead);
     }
 
     @EventHandler
-    public void onSpawn(CreatureSpawnEvent event) {
-        LivingEntity mob = event.getEntity();
-        if (mob instanceof Enemy && plugin.isManaged(mob.getWorld())) {
-            plugin.strengthenMob(mob, true);
+    public void onJoin(PlayerJoinEvent event) {
+        // Routes new arrivals, applies personal max HP from Death stacks, wipes
+        // anyone who was offline through a reset, and reopens keep-item picks.
+        plugin.handleArrival(event.getPlayer());
+    }
+
+    /** Death's Poison HUD buff must not actually deal poison damage. */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPoisonDamage(EntityDamageEvent event) {
+        if (event.getCause() != EntityDamageEvent.DamageCause.POISON) {
+            return;
+        }
+        if (!(event.getEntity() instanceof Player p)) {
+            return;
+        }
+        if (plugin.getDeathStacks().hasActive(p.getUniqueId())) {
+            event.setCancelled(true);
         }
     }
 
+    /** Milk (etc.) clearing Poison: put the Death HUD buff back if stacks remain. */
     @EventHandler
-    public void onJoin(PlayerJoinEvent event) {
-        // Routes new arrivals, applies the shared max HP, wipes anyone who was
-        // offline through a reset, and reopens any pending keep-item picks.
-        plugin.handleArrival(event.getPlayer());
+    public void onPotionChange(EntityPotionEffectEvent event) {
+        if (!(event.getEntity() instanceof Player p)) {
+            return;
+        }
+        if (!plugin.getDeathStacks().hasActive(p.getUniqueId())) {
+            return;
+        }
+        if (event.getAction() != EntityPotionEffectEvent.Action.REMOVED) {
+            return;
+        }
+        if (event.getOldEffect() == null || event.getOldEffect().getType() != PotionEffectType.POISON) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (p.isOnline()) {
+                plugin.syncDeathEffect(p);
+            }
+        });
     }
 
     @EventHandler
@@ -86,8 +121,7 @@ public final class GameListener implements Listener {
         // With hardcore=true in server.properties, the server forces every
         // dead player into spectator right AFTER the respawn events have run
         // (it reads server.properties, so the per-world hardcore flag doesn't
-        // stop it). Deaths here cost the team hearts instead of the run, so
-        // cancel that switch outright.
+        // stop it). Cancel that switch so Death stacks can apply on respawn.
         if (event.getCause() != PlayerGameModeChangeEvent.Cause.HARDCORE_DEATH) {
             return;
         }
@@ -101,7 +135,7 @@ public final class GameListener implements Listener {
     @EventHandler
     public void onPostRespawn(PlayerPostRespawnEvent event) {
         // Undo spectator mode from any hardcore world flag and reapply the
-        // team's reduced max health to the fresh player entity.
+        // player's Death-reduced max health to the fresh player entity.
         plugin.handleRespawned(event.getPlayer());
     }
 

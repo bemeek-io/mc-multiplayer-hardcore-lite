@@ -2,7 +2,7 @@ name: MultiplayerHardcoreLite
 version: '${version}'
 main: com.evensteven.mhplus.MHPlus
 api-version: '26.2'
-description: Every death drains the team's max health and buffs mobs; at zero the world resets and players pick a few items to carry over.
+description: Each death grants a timed Death stack that cuts that player's max health; at zero the world resets. Clean players may pick items to carry over.
 authors: [you]
 commands:
   mhreset:
@@ -10,7 +10,7 @@ commands:
     usage: /mhreset [seed]
     permission: mhplus.reset
   mhstatus:
-    description: Show the current run's attempt, deaths, remaining max health and mob strength.
+    description: Show the current run's attempt, deaths, and your Death stacks / max health.
     usage: /mhstatus
   mhkeep:
     description: Reopen your pending "choose items to keep" menu after a world reset.

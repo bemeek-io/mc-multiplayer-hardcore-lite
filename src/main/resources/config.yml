@@ -1,4 +1,4 @@
-# === Multiplayer Hardcore Plus ===
+# === Multiplayer Hardcore Lite ===
 # Your server's PRIMARY world (level-name in server.properties, usually "world")
 # is used ONLY as a holding area during resets and is never played in.
 # The gameplay world set below MUST have a different name than level-name.
@@ -10,7 +10,7 @@ gameplay-world: hardcore
 enable-nether: true
 enable-end: true
 
-# Seconds between the pool-emptying death and the wipe.
+# Seconds between the fatal Death (0 max hearts) and the wipe.
 countdown-seconds: 5
 
 # World border radius in blocks. 0 = NO border (default). Larger = bigger area but
@@ -18,24 +18,23 @@ countdown-seconds: 5
 world-border-radius: 0
 
 # Wipe inventories, armor and XP when the world resets.
-# Players still get their keep-items-count picks back afterwards.
+# Clean players (no Death stacks) still get their keep-items-count picks back.
 clear-inventory-on-reset: true
 
 # Ender chest contents persist across world resets by default (a shared
 # stash that survives the apocalypse). Set true to wipe them too.
 clear-ender-chest-on-reset: false
 
-# Hearts every player loses each time someone dies (1 heart = 2 HP).
-# With the default 2, the 5th death empties the pool and resets the world.
-hearts-lost-per-death: 2
-
-# How much stronger hostile mobs get per accumulated death this run.
-# 0.15 = +15% max health per death; 0.10 = +10% attack damage per death.
-mob-health-bonus-per-death: 0.15
-mob-damage-bonus-per-death: 0.10
+# Each death grants that player a timed "Death" stack: −hearts from max HP
+# for death-duration-hours. Stacks expire independently and only affect the
+# player who died. At 0 max hearts the world resets. Default: −2 hearts for
+# 48h; the 5th active stack resets the world for that player.
+hearts-per-death-stack: 2
+death-duration-hours: 48
 
 # How many items/stacks each player may carry from their old inventory into
 # the next world after a reset. 0 disables the selection entirely.
+# Players with any active Death stack at wipe time do not get picks.
 keep-items-count: 3
 
 # --- managed automatically; don't edit ---

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * Persists each player's "last played" inventory across world resets, plus how
@@ -81,8 +82,11 @@ public final class SnapshotStore {
         save();
     }
 
-    /** After a reset: everyone with a snapshot and no outstanding picks gets a fresh set. */
-    public void offerPicksToAll(int picks) {
+    /**
+     * After a reset: everyone with a snapshot, no outstanding picks, and who
+     * passes {@code eligible} gets a fresh set of keep-picks.
+     */
+    public void offerPicksToAll(int picks, Predicate<UUID> eligible) {
         ConfigurationSection players = data.getConfigurationSection("players");
         if (players == null) {
             return;
@@ -90,6 +94,10 @@ public final class SnapshotStore {
         for (String key : players.getKeys(false)) {
             ConfigurationSection s = players.getConfigurationSection(key);
             if (s == null) {
+                continue;
+            }
+            UUID id = UUID.fromString(key);
+            if (!eligible.test(id)) {
                 continue;
             }
             if (s.getInt("pending-picks", 0) <= 0 && !s.getStringList("items").isEmpty()) {
