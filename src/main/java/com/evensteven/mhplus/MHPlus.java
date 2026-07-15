@@ -126,7 +126,8 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             getCommand("mhkeep").setExecutor(this);
         }
 
-        // Expire stacks and reapply max HP about once a minute.
+        // Expire stacks and restore max HP about once a minute. Poison HUD duration
+        // is set from wall-clock remaining on login/respawn/death (see syncDeathEffect).
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -262,9 +263,9 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
                     + " §7(" + fmt(Math.max(0.0, max) / 2.0) + " hearts)");
             Long next = deathStacks.nextExpiry(p.getUniqueId());
             if (next != null) {
-                long hoursLeft = Math.max(0L, (next - System.currentTimeMillis() + 3_599_999L) / 3_600_000L);
-                sender.sendMessage("§7Next Death expires in about §e" + hoursLeft + " hour"
-                        + (hoursLeft == 1 ? "" : "s") + "§7.");
+                sender.sendMessage("§7Next Death expires in §e"
+                        + formatRemaining(next - System.currentTimeMillis())
+                        + " §7(real-world time).");
             }
         }
         return true;
@@ -289,6 +290,21 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
 
     private static String fmt(double v) {
         return v == Math.floor(v) ? String.valueOf((long) v) : String.valueOf(v);
+    }
+
+    /** Formats a positive remaining duration as e.g. "47h 12m". */
+    private static String formatRemaining(long remainingMs) {
+        long totalSec = Math.max(0L, remainingMs) / 1000L;
+        long hours = totalSec / 3600L;
+        long minutes = (totalSec % 3600L) / 60L;
+        if (hours > 0) {
+            return hours + "h " + minutes + "m";
+        }
+        long seconds = totalSec % 60L;
+        if (minutes > 0) {
+            return minutes + "m " + seconds + "s";
+        }
+        return seconds + "s";
     }
 
     private void announce(String msg) {
@@ -369,8 +385,9 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
 
     /**
      * Shows Death stacks as a vanilla Poison HUD buff (icon + roman level +
-     * countdown to the next stack expiry). Damage from that poison is cancelled
-     * in GameListener so it stays cosmetic.
+     * countdown). Duration is set from wall-clock remaining at sync time
+     * (login, respawn, death, milk re-apply); while online the vanilla timer
+     * ticks normally. Damage is cancelled in GameListener so it stays cosmetic.
      */
     public void syncDeathEffect(Player p) {
         int stacks = deathStacks.activeCount(p.getUniqueId());
@@ -379,6 +396,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             return;
         }
         Long next = deathStacks.nextExpiry(p.getUniqueId());
+        // Wall clock → tick length for the HUD (20 ticks = 1 real second at 20 TPS).
         long remainingMs = next == null ? deathDurationMs : Math.max(50L, next - System.currentTimeMillis());
         int ticks = (int) Math.min(Integer.MAX_VALUE, remainingMs / 50L);
         // ambient=false, particles=true, icon=true — shows in the top-right buff bar

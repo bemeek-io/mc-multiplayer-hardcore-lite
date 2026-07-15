@@ -11,7 +11,8 @@ import java.util.UUID;
 
 /**
  * Persists per-player timed "Death" stacks. Each stack is an independent
- * expiry timestamp (epoch ms); once expired it no longer reduces max health.
+ * wall-clock expiry timestamp (epoch ms — real-world time, not Minecraft
+ * day/night); once expired it no longer reduces max health.
  */
 public final class DeathStacks {
 

@@ -26,9 +26,11 @@ clear-inventory-on-reset: true
 clear-ender-chest-on-reset: false
 
 # Each death grants that player a timed "Death" stack: −hearts from max HP
-# for death-duration-hours. Stacks expire independently and only affect the
-# player who died. At 0 max hearts the world resets. Default: −2 hearts for
-# 48h; the 5th active stack resets the world for that player.
+# for death-duration-hours of REAL-WORLD / wall-clock time (continues while
+# the server is offline or the player is logged out — not Minecraft day length).
+# Stacks expire independently and only affect the player who died. At 0 max
+# hearts the world resets. Default: −2 hearts for 48 real hours; the 5th
+# active stack resets the world for that player.
 hearts-per-death-stack: 2
 death-duration-hours: 48
 
