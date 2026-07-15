@@ -89,6 +89,7 @@ public final class GameListener implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         Player p = event.getPlayer();
+        plugin.clearDeathBar(p.getUniqueId());
         // Freeze their inventory as the "last played" snapshot — unless they
         // still owe picks from an earlier reset, in which case that older
         // snapshot must survive.

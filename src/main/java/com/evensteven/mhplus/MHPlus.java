@@ -11,6 +11,9 @@ import org.bukkit.WorldBorder;
 import org.bukkit.WorldCreator;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -27,7 +30,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -75,6 +81,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     private SnapshotStore snapshots;
     private DeathStacks deathStacks;
     private KeepSelection selection;
+    private final Map<UUID, BossBar> deathBars = new HashMap<>();
     private final Random random = new Random();
 
     @Override
@@ -156,6 +163,9 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
 
     @Override
     public void onDisable() {
+        for (UUID id : deathBars.keySet().toArray(new UUID[0])) {
+            clearDeathBar(id);
+        }
         getConfig().set("attempts", attempts);
         getConfig().set("deaths", deaths);
         getConfig().set("seed", currentSeed);
@@ -384,23 +394,42 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     }
 
     /**
-     * Shows Death stacks as a vanilla Poison HUD buff (icon + roman level +
-     * countdown). Duration is set from wall-clock remaining at sync time
-     * (login, respawn, death, milk re-apply); while online the vanilla timer
-     * ticks normally. Damage is cancelled in GameListener so it stays cosmetic.
+     * Shows Death stacks as infinite Poison (icon/level only — vanilla potion
+     * timers count game ticks and cannot reliably show wall-clock 48h) plus a
+     * boss bar with remaining real-world time. Damage is cancelled in
+     * GameListener so the poison stays cosmetic.
      */
     public void syncDeathEffect(Player p) {
         int stacks = deathStacks.activeCount(p.getUniqueId());
         if (stacks <= 0) {
             p.removePotionEffect(PotionEffectType.POISON);
+            clearDeathBar(p.getUniqueId());
             return;
         }
         Long next = deathStacks.nextExpiry(p.getUniqueId());
-        // Wall clock → tick length for the HUD (20 ticks = 1 real second at 20 TPS).
-        long remainingMs = next == null ? deathDurationMs : Math.max(50L, next - System.currentTimeMillis());
-        int ticks = (int) Math.min(Integer.MAX_VALUE, remainingMs / 50L);
-        // ambient=false, particles=true, icon=true — shows in the top-right buff bar
-        p.addPotionEffect(new PotionEffect(PotionEffectType.POISON, ticks, stacks - 1, false, true, true), true);
+        long remainingMs = next == null ? deathDurationMs : Math.max(0L, next - System.currentTimeMillis());
+        // Infinite duration: client won't show a misleading tick-based countdown.
+        p.addPotionEffect(new PotionEffect(
+                PotionEffectType.POISON, PotionEffect.INFINITE_DURATION, stacks - 1, false, true, true), true);
+
+        double progress = Math.min(1.0, Math.max(0.0, (double) remainingMs / (double) deathDurationMs));
+        BossBar bar = deathBars.get(p.getUniqueId());
+        if (bar == null) {
+            bar = Bukkit.createBossBar("", BarColor.GREEN, BarStyle.SOLID);
+            bar.addPlayer(p);
+            deathBars.put(p.getUniqueId(), bar);
+        }
+        bar.setTitle("Death x" + stacks + " — " + formatRemaining(remainingMs) + " left (real time)");
+        bar.setProgress(progress);
+        bar.setVisible(true);
+    }
+
+    public void clearDeathBar(UUID id) {
+        BossBar bar = deathBars.remove(id);
+        if (bar != null) {
+            bar.removeAll();
+            bar.setVisible(false);
+        }
     }
 
     /**
@@ -511,6 +540,9 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         // Carryover only for players who had no Death stacks at wipe time.
         snapshots.offerPicksToAll(keepItemCount, id -> !deathStacks.hasActive(id));
         deathStacks.clearAll();
+        for (UUID id : deathBars.keySet().toArray(new UUID[0])) {
+            clearDeathBar(id);
+        }
 
         over.getChunkAt(over.getSpawnLocation()).load();
         for (Player p : Bukkit.getOnlinePlayers()) {
