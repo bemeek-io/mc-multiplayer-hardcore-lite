@@ -168,7 +168,14 @@ public final class GameListener implements Listener {
         if (target != null) {
             event.setTo(target);
             event.setCanCreatePortal(true);
-            event.setSearchRadius(128);
+            // Overworld and Nether use different scales: a 128-block overworld
+            // search window is only 16 blocks in the Nether (÷8).
+            if (target.getWorld() != null
+                    && target.getWorld().getEnvironment() == World.Environment.NETHER) {
+                event.setSearchRadius(16);
+            } else {
+                event.setSearchRadius(128);
+            }
         }
     }
 
