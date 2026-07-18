@@ -18,6 +18,7 @@ import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
 import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
+import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
 public final class GameListener implements Listener {
@@ -50,7 +51,11 @@ public final class GameListener implements Listener {
         plugin.handleArrival(event.getPlayer());
     }
 
-    /** Death's Poison HUD buff must not actually deal poison damage. */
+    /**
+     * Death's Poison HUD buff must not actually deal poison damage.
+     * Stacks expire on wall-clock immediately, but the infinite HUD effect is
+     * only cleared on the next prune pass — cancel through that gap too.
+     */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onPoisonDamage(EntityDamageEvent event) {
         if (event.getCause() != EntityDamageEvent.DamageCause.POISON) {
@@ -61,6 +66,13 @@ public final class GameListener implements Listener {
         }
         if (plugin.getDeathStacks().hasActive(p.getUniqueId())) {
             event.setCancelled(true);
+            return;
+        }
+        PotionEffect effect = p.getPotionEffect(PotionEffectType.POISON);
+        if (effect != null && effect.getDuration() == PotionEffect.INFINITE_DURATION) {
+            event.setCancelled(true);
+            // Clear leftover Death HUD poison and restore max HP now.
+            plugin.applyMaxHealth(p);
         }
     }
 

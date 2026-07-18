@@ -133,8 +133,9 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             getCommand("mhkeep").setExecutor(this);
         }
 
-        // Expire stacks and restore max HP about once a minute. Poison HUD duration
-        // is set from wall-clock remaining on login/respawn/death (see syncDeathEffect).
+        // Expire stacks and sync Death HUD / max HP every second. Wall-clock
+        // expiry is immediate in deaths.yml; without a frequent sync the leftover
+        // infinite Poison would deal real damage until the next pass.
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -143,10 +144,17 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
                 }
                 deathStacks.pruneExpired();
                 for (Player p : Bukkit.getOnlinePlayers()) {
-                    applyMaxHealth(p);
+                    if (deathStacks.hasActive(p.getUniqueId())) {
+                        applyMaxHealth(p);
+                        continue;
+                    }
+                    PotionEffect effect = p.getPotionEffect(PotionEffectType.POISON);
+                    if (effect != null && effect.getDuration() == PotionEffect.INFINITE_DURATION) {
+                        applyMaxHealth(p);
+                    }
                 }
             }
-        }.runTaskTimer(this, 20L * 60L, 20L * 60L);
+        }.runTaskTimer(this, 20L, 20L);
 
         if (Bukkit.isHardcore()) {
             getLogger().warning("hardcore=true is set in server.properties. The plugin cancels the"
@@ -419,7 +427,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             bar.addPlayer(p);
             deathBars.put(p.getUniqueId(), bar);
         }
-        bar.setTitle("Death x" + stacks + " — " + formatRemaining(remainingMs) + " left (real time)");
+        bar.setTitle("Death x" + stacks + " — " + formatRemaining(remainingMs) + " left");
         bar.setProgress(progress);
         bar.setVisible(true);
     }
