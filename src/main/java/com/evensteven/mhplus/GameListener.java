@@ -23,6 +23,8 @@ import org.bukkit.potion.PotionEffectType;
 
 public final class GameListener implements Listener {
 
+    private static final int NETHER_SCALE = 8;
+
     private final MHPlus plugin;
 
     public GameListener(MHPlus plugin) {
@@ -162,11 +164,26 @@ public final class GameListener implements Listener {
         Location target = null;
 
         if (cause == TeleportCause.NETHER_PORTAL && plugin.getNether() != null) {
+            // Block coords + floorDiv so ÷8 then ×8 round-trips the Nether cell.
+            // creationRadius 0 forces any new portal onto that exact cell (no
+            // terrain drift), so the return search center lands next to the
+            // original overworld portal instead of ~100+ blocks away.
             Location f = event.getFrom();
+            int bx = f.getBlockX();
+            int by = f.getBlockY();
+            int bz = f.getBlockZ();
             if (from.equals(plugin.getOver())) {
-                target = new Location(plugin.getNether(), f.getX() / 8.0, f.getY(), f.getZ() / 8.0);
+                target = new Location(
+                        plugin.getNether(),
+                        Math.floorDiv(bx, NETHER_SCALE),
+                        by,
+                        Math.floorDiv(bz, NETHER_SCALE));
             } else if (from.equals(plugin.getNether())) {
-                target = new Location(plugin.getOver(), f.getX() * 8.0, f.getY(), f.getZ() * 8.0);
+                target = new Location(
+                        plugin.getOver(),
+                        bx * NETHER_SCALE,
+                        by,
+                        bz * NETHER_SCALE);
             }
         } else if (cause == TeleportCause.END_PORTAL && plugin.getEnd() != null) {
             if (from.equals(plugin.getOver())) {
@@ -180,13 +197,15 @@ public final class GameListener implements Listener {
         if (target != null) {
             event.setTo(target);
             event.setCanCreatePortal(true);
-            // Overworld and Nether use different scales: a 128-block overworld
-            // search window is only 16 blocks in the Nether (÷8).
-            if (target.getWorld() != null
-                    && target.getWorld().getEnvironment() == World.Environment.NETHER) {
-                event.setSearchRadius(16);
-            } else {
-                event.setSearchRadius(128);
+            if (cause == TeleportCause.NETHER_PORTAL) {
+                event.setCreationRadius(0);
+                // Search window matches the scale: 16 Nether blocks == 128 OW.
+                if (target.getWorld() != null
+                        && target.getWorld().getEnvironment() == World.Environment.NETHER) {
+                    event.setSearchRadius(16);
+                } else {
+                    event.setSearchRadius(128);
+                }
             }
         }
     }
