@@ -15,6 +15,9 @@ commands:
   mhkeep:
     description: Reopen your pending "choose items to keep" menu after a world reset.
     usage: /mhkeep
+  truespawn:
+    description: Show the coords of the gameplay world's true spawn point.
+    usage: /truespawn
 permissions:
   mhplus.reset:
     description: Allows forcing a manual world reset.

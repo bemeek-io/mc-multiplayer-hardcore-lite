@@ -48,6 +48,7 @@ import java.util.stream.Stream;
  *   /mhreset [seed]  - force a reset now, optionally with a seed.
  *   /mhstatus        - show the state of the current run / your Death stacks.
  *   /mhkeep          - reopen a pending "choose items to keep" menu.
+ *   /truespawn       - show the gameplay overworld's true spawn coords.
  */
 public final class MHPlus extends JavaPlugin implements CommandExecutor {
 
@@ -131,6 +132,9 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         }
         if (getCommand("mhkeep") != null) {
             getCommand("mhkeep").setExecutor(this);
+        }
+        if (getCommand("truespawn") != null) {
+            getCommand("truespawn").setExecutor(this);
         }
 
         // Expire stacks and sync Death HUD / max HP every second. Wall-clock
@@ -246,6 +250,8 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
                 return cmdStatus(sender);
             case "mhkeep":
                 return cmdKeep(sender);
+            case "truespawn":
+                return cmdTrueSpawn(sender);
             default:
                 return false;
         }
@@ -303,6 +309,14 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
             return true;
         }
         selection.openIfPending(p);
+        return true;
+    }
+
+    private boolean cmdTrueSpawn(CommandSender sender) {
+        Location spawn = over.getSpawnLocation();
+        sender.sendMessage("§6True spawn: §e"
+                + spawn.getBlockX() + " " + spawn.getBlockY() + " " + spawn.getBlockZ()
+                + " §7(" + spawn.getWorld().getName() + ")");
         return true;
     }
 
