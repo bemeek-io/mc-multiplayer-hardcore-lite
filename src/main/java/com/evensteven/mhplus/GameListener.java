@@ -1,14 +1,17 @@
 package com.evensteven.mhplus;
 
+import io.papermc.paper.event.entity.EntityPortalReadyEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.PortalType;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityPortalEvent;
 import org.bukkit.event.entity.EntityPotionEffectEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -154,59 +157,165 @@ public final class GameListener implements Listener {
         plugin.handleRespawned(event.getPlayer());
     }
 
+    /**
+     * Custom worlds are not auto-linked. Point nether/end ready teleports at
+     * the managed pair before Player/EntityPortalEvent refine coordinates.
+     */
     @EventHandler(ignoreCancelled = true)
-    public void onPortal(PlayerPortalEvent event) {
-        World from = event.getFrom().getWorld();
+    public void onPortalReady(EntityPortalReadyEvent event) {
+        World from = event.getEntity().getWorld();
         if (!plugin.isManaged(from)) {
+            return;
+        }
+        if (plugin.isResetting()) {
+            event.setCancelled(true);
+            return;
+        }
+        PortalType type = event.getPortalType();
+        if (type == PortalType.NETHER && plugin.getNether() != null) {
+            if (from.equals(plugin.getOver())) {
+                event.setTargetWorld(plugin.getNether());
+            } else if (from.equals(plugin.getNether())) {
+                event.setTargetWorld(plugin.getOver());
+            }
+        } else if (type == PortalType.ENDER && plugin.getEnd() != null) {
+            if (from.equals(plugin.getOver())) {
+                event.setTargetWorld(plugin.getEnd());
+            } else if (from.equals(plugin.getEnd())) {
+                event.setTargetWorld(plugin.getOver());
+            }
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onPlayerPortal(PlayerPortalEvent event) {
+        if (plugin.isResetting()) {
+            event.setCancelled(true);
+            return;
+        }
+        Location from = event.getFrom();
+        World fromWorld = from.getWorld();
+        if (!plugin.isManaged(fromWorld)) {
             return;
         }
         TeleportCause cause = event.getCause();
         Location target = null;
-
-        if (cause == TeleportCause.NETHER_PORTAL && plugin.getNether() != null) {
-            // Block coords + floorDiv so ÷8 then ×8 round-trips the Nether cell.
-            // creationRadius 0 forces any new portal onto that exact cell (no
-            // terrain drift), so the return search center lands next to the
-            // original overworld portal instead of ~100+ blocks away.
-            Location f = event.getFrom();
-            int bx = f.getBlockX();
-            int by = f.getBlockY();
-            int bz = f.getBlockZ();
-            if (from.equals(plugin.getOver())) {
-                target = new Location(
-                        plugin.getNether(),
-                        Math.floorDiv(bx, NETHER_SCALE),
-                        by,
-                        Math.floorDiv(bz, NETHER_SCALE));
-            } else if (from.equals(plugin.getNether())) {
-                target = new Location(
-                        plugin.getOver(),
-                        bx * NETHER_SCALE,
-                        by,
-                        bz * NETHER_SCALE);
-            }
-        } else if (cause == TeleportCause.END_PORTAL && plugin.getEnd() != null) {
-            if (from.equals(plugin.getOver())) {
-                buildEndPlatform(plugin.getEnd(), 100, 49, 0);
-                target = new Location(plugin.getEnd(), 100.5, 50, 0.5);
-            } else if (from.equals(plugin.getEnd())) {
-                target = plugin.getOver().getSpawnLocation();
-            }
+        if (cause == TeleportCause.NETHER_PORTAL) {
+            target = netherPortalTarget(fromWorld, from);
+        } else if (cause == TeleportCause.END_PORTAL) {
+            target = endPortalTarget(fromWorld);
         }
+        if (target == null) {
+            return;
+        }
+        event.setTo(target);
+        event.setCanCreatePortal(true);
+        if (cause == TeleportCause.NETHER_PORTAL) {
+            applyNetherPortalRadii(event::setCreationRadius, event::setSearchRadius, target);
+        }
+    }
 
-        if (target != null) {
-            event.setTo(target);
-            event.setCanCreatePortal(true);
-            if (cause == TeleportCause.NETHER_PORTAL) {
-                event.setCreationRadius(0);
-                // Search window matches the scale: 16 Nether blocks == 128 OW.
-                if (target.getWorld() != null
-                        && target.getWorld().getEnvironment() == World.Environment.NETHER) {
-                    event.setSearchRadius(16);
-                } else {
-                    event.setSearchRadius(128);
-                }
-            }
+    @EventHandler(ignoreCancelled = true)
+    public void onEntityPortal(EntityPortalEvent event) {
+        if (plugin.isResetting()) {
+            event.setCancelled(true);
+            return;
+        }
+        Location from = event.getFrom();
+        World fromWorld = from.getWorld();
+        if (!plugin.isManaged(fromWorld)) {
+            return;
+        }
+        PortalType type = event.getPortalType();
+        Location target = null;
+        if (type == PortalType.NETHER) {
+            target = netherPortalTarget(fromWorld, from);
+        } else if (type == PortalType.ENDER) {
+            target = endPortalTarget(fromWorld);
+        } else if (type == PortalType.END_GATEWAY) {
+            target = retargetIfUnmanaged(event.getTo());
+        }
+        if (target == null) {
+            return;
+        }
+        event.setTo(target);
+        event.setCanCreatePortal(true);
+        if (type == PortalType.NETHER) {
+            applyNetherPortalRadii(event::setCreationRadius, event::setSearchRadius, target);
+        }
+    }
+
+    /**
+     * Block coords + floorDiv so ÷8 then ×8 round-trips the Nether cell.
+     * creationRadius 0 (applied by callers) forces any new portal onto that
+     * exact cell so return trips find the original overworld portal.
+     */
+    private Location netherPortalTarget(World from, Location fromLoc) {
+        if (plugin.getNether() == null) {
+            return null;
+        }
+        int bx = fromLoc.getBlockX();
+        int by = fromLoc.getBlockY();
+        int bz = fromLoc.getBlockZ();
+        if (from.equals(plugin.getOver())) {
+            return new Location(
+                    plugin.getNether(),
+                    Math.floorDiv(bx, NETHER_SCALE),
+                    by,
+                    Math.floorDiv(bz, NETHER_SCALE));
+        }
+        if (from.equals(plugin.getNether())) {
+            return new Location(
+                    plugin.getOver(),
+                    bx * NETHER_SCALE,
+                    by,
+                    bz * NETHER_SCALE);
+        }
+        return null;
+    }
+
+    private Location endPortalTarget(World from) {
+        if (plugin.getEnd() == null) {
+            return null;
+        }
+        if (from.equals(plugin.getOver())) {
+            buildEndPlatform(plugin.getEnd(), 100, 49, 0);
+            return new Location(plugin.getEnd(), 100.5, 50, 0.5);
+        }
+        if (from.equals(plugin.getEnd())) {
+            return plugin.getOver().getSpawnLocation();
+        }
+        return null;
+    }
+
+    /** Keep end-gateway exits inside the managed world set when vanilla aims at limbo. */
+    private Location retargetIfUnmanaged(Location to) {
+        if (to == null || to.getWorld() == null || plugin.isManaged(to.getWorld())) {
+            return null;
+        }
+        World replacement = switch (to.getWorld().getEnvironment()) {
+            case NORMAL -> plugin.getOver();
+            case NETHER -> plugin.getNether();
+            case THE_END -> plugin.getEnd();
+            default -> null;
+        };
+        if (replacement == null) {
+            return null;
+        }
+        return new Location(replacement, to.getX(), to.getY(), to.getZ(), to.getYaw(), to.getPitch());
+    }
+
+    private static void applyNetherPortalRadii(
+            java.util.function.IntConsumer creationRadius,
+            java.util.function.IntConsumer searchRadius,
+            Location target) {
+        creationRadius.accept(0);
+        // Search window matches the scale: 16 Nether blocks == 128 OW.
+        if (target.getWorld() != null
+                && target.getWorld().getEnvironment() == World.Environment.NETHER) {
+            searchRadius.accept(16);
+        } else {
+            searchRadius.accept(128);
         }
     }
 
