@@ -1,26 +1,35 @@
 package com.evensteven.mhplus;
 
+import com.destroystokyo.paper.event.entity.EntityTeleportEndGatewayEvent;
+import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
+import com.destroystokyo.paper.event.player.PlayerTeleportEndGatewayEvent;
 import io.papermc.paper.event.entity.EntityPortalReadyEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.PortalType;
 import org.bukkit.World;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.EntityPortalEvent;
 import org.bukkit.event.entity.EntityPotionEffectEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.PrepareItemCraftEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
-import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
 import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
+import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
@@ -157,6 +166,60 @@ public final class GameListener implements Listener {
         plugin.handleRespawned(event.getPlayer());
     }
 
+    /** Crafted compasses must become spawn-bound lodestone compasses. */
+    @EventHandler
+    public void onPrepareCraft(PrepareItemCraftEvent event) {
+        ItemStack result = event.getInventory().getResult();
+        if (plugin.getSpawnCompasses().bind(result)) {
+            event.getInventory().setResult(result);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onPickup(EntityPickupItemEvent event) {
+        if (!(event.getEntity() instanceof Player)) {
+            return;
+        }
+        Item item = event.getItem();
+        ItemStack stack = item.getItemStack();
+        if (plugin.getSpawnCompasses().bind(stack)) {
+            item.setItemStack(stack);
+        }
+    }
+
+    /** Chests, trades, etc. — bind any unbound compass that enters the inventory. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player p)) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (p.isOnline()) {
+                plugin.getSpawnCompasses().bindInventory(p);
+            }
+        });
+    }
+
+    /** After vanilla lodestone pairing, drop our spawn-compass marker. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onLodestoneUse(PlayerInteractEvent event) {
+        if (event.getClickedBlock() == null
+                || event.getClickedBlock().getType() != Material.LODESTONE) {
+            return;
+        }
+        EquipmentSlot hand = event.getHand();
+        if (hand == null) {
+            return;
+        }
+        Player p = event.getPlayer();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!p.isOnline()) {
+                return;
+            }
+            plugin.getSpawnCompasses().clearMarkerIfPlayerLodestone(p.getInventory().getItem(hand));
+        });
+    }
+
     /**
      * Custom worlds are not auto-linked. Point nether/end ready teleports at
      * the managed pair before Player/EntityPortalEvent refine coordinates.
@@ -232,8 +295,6 @@ public final class GameListener implements Listener {
             target = netherPortalTarget(fromWorld, from);
         } else if (type == PortalType.ENDER) {
             target = endPortalTarget(fromWorld);
-        } else if (type == PortalType.END_GATEWAY) {
-            target = retargetIfUnmanaged(event.getTo());
         }
         if (target == null) {
             return;
@@ -242,6 +303,37 @@ public final class GameListener implements Listener {
         event.setCanCreatePortal(true);
         if (type == PortalType.NETHER) {
             applyNetherPortalRadii(event::setCreationRadius, event::setSearchRadius, target);
+        }
+    }
+
+    /**
+     * Gateways use Paper's EndGateway teleport events, not Player/EntityPortalEvent.
+     * Island hops stay in-world; return gateways must not dump into limbo.
+     */
+    @EventHandler(ignoreCancelled = true)
+    public void onPlayerEndGateway(PlayerTeleportEndGatewayEvent event) {
+        if (plugin.isResetting()) {
+            event.setCancelled(true);
+            return;
+        }
+        Location target = endGatewayTarget(event.getFrom(), event.getTo());
+        if (target != null) {
+            event.setTo(target);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onEntityEndGateway(EntityTeleportEndGatewayEvent event) {
+        if (event.getEntity() instanceof Player) {
+            return;
+        }
+        if (plugin.isResetting()) {
+            event.setCancelled(true);
+            return;
+        }
+        Location target = endGatewayTarget(event.getFrom(), event.getTo());
+        if (target != null) {
+            event.setTo(target);
         }
     }
 
@@ -288,10 +380,23 @@ public final class GameListener implements Listener {
         return null;
     }
 
-    /** Keep end-gateway exits inside the managed world set when vanilla aims at limbo. */
-    private Location retargetIfUnmanaged(Location to) {
+    /**
+     * Island gateways already land in the managed End — leave them alone.
+     * Return gateways (End → overworld) aim at limbo; send to gameplay spawn
+     * like the end portal exit. Any other unmanaged destination keeps coords
+     * but swaps onto the matching managed world.
+     */
+    private Location endGatewayTarget(Location from, Location to) {
+        if (from == null || from.getWorld() == null || !plugin.isManaged(from.getWorld())) {
+            return null;
+        }
         if (to == null || to.getWorld() == null || plugin.isManaged(to.getWorld())) {
             return null;
+        }
+        if (from.getWorld().equals(plugin.getEnd())
+                && to.getWorld().getEnvironment() == World.Environment.NORMAL
+                && plugin.getOver() != null) {
+            return plugin.getOver().getSpawnLocation();
         }
         World replacement = switch (to.getWorld().getEnvironment()) {
             case NORMAL -> plugin.getOver();

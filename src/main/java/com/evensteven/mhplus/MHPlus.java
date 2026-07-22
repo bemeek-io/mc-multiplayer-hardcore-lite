@@ -82,6 +82,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
     private SnapshotStore snapshots;
     private DeathStacks deathStacks;
     private KeepSelection selection;
+    private SpawnCompasses spawnCompasses;
     private final Map<UUID, BossBar> deathBars = new HashMap<>();
     private final Random random = new Random();
 
@@ -120,6 +121,7 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         snapshots = new SnapshotStore(this);
         deathStacks = new DeathStacks(this, deathDurationMs);
         selection = new KeepSelection(this, snapshots);
+        spawnCompasses = new SpawnCompasses(this);
 
         loadOrCreateWorlds(currentSeed);
         getServer().getPluginManager().registerEvents(new GameListener(this), this);
@@ -683,10 +685,13 @@ public final class MHPlus extends JavaPlugin implements CommandExecutor {
         } else if (!isManaged(p.getWorld())) {
             p.teleport(over.getSpawnLocation());
         }
+        spawnCompasses.bindInventory(p);
         selection.openIfPendingLater(p, 40L);
     }
 
     // -------------------------------------------------------------- helpers
+
+    public SpawnCompasses getSpawnCompasses() { return spawnCompasses; }
 
     public boolean isResetting() { return resetting; }
     public World getLimbo() { return limbo; }

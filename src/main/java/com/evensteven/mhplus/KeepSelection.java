@@ -153,6 +153,7 @@ public final class KeepSelection implements Listener {
     }
 
     private void give(Player p, ItemStack item) {
+        plugin.getSpawnCompasses().bind(item);
         Map<Integer, ItemStack> leftover = p.getInventory().addItem(item);
         for (ItemStack rest : leftover.values()) {
             p.getWorld().dropItemNaturally(p.getLocation(), rest);
